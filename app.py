@@ -1,246 +1,348 @@
-from dash import Dash, html, dcc, callback, Output, Input, State, ctx
-import plotly.express as px
-import plotly.graph_objects as go
-import igraph as ig
-import networkx as nx
+from dash import Dash, html, dcc, callback, Output, Input, State, no_update
 from argparse import ArgumentParser
 from furl import furl
+import dash_cytoscape as cyto
 
-from Lambda import get_initial_tree
-from Lambda import get_next_tree
-from Lambda import get_next_tree_after_math
+from Lambda import get_initial_tree, get_next_tree, get_next_tree_after_math
 from Lambda import tree2dict, to_string, json2tree
+from styles import cytoscape_stylesheet, styles
 
-def build_tree(G, node_data, parent=None):
-    # create a new node
+cyto.load_extra_layouts()
+
+# ======== TREE VISUALIZATION ========
+def json_to_cytoscape_elements(node_data, parent_id=None, elements=None, level=0, x=0, y=0, x_offset=120, y_offset=100, level_positions=None):
+    if elements is None:
+        elements = []
+    
+    if level_positions is None:
+        level_positions = {}
+    
     node_id = node_data['nodeid']
-    G.add_node(node_id, 
-               type=node_data['type'], 
-               beta=node_data.get('beta'), 
-               var=node_data.get('var'), 
-               value=node_data.get('value'))
-    if parent is not None:
-        G.add_edge(parent, node_id)
-    # add the node's children recursively
-    for child_data in node_data['children']:
-        build_tree(G, child_data, node_id)
+    node_type = node_data['type']
+    beta_status = node_data.get('beta')
+    
+    # minimum pixel distance between nodes at same level
+    min_separation = 60
+    
+    if y not in level_positions:
+        level_positions[y] = []
+    
+    # check if node overlaps with existing nodes
+    overlap_detected = False
+    for pos in level_positions[y]:
+        if abs(pos - x) < min_separation:
+            overlap_detected = True
+            break
+    
+    # adjust position if overlap occurs
+    if overlap_detected and parent_id:
+        y += y_offset / 2
+        
+        if y not in level_positions:
+            level_positions[y] = []
+    
+    level_positions[y].append(x)
+    
+    # determine node style based on type
+    if node_type == 'lambda':
+        label = f"{node_data['var']}"
+        node_class = 'lambda-node'
+    elif node_type == 'apply':
+        label = ""
+        node_class = 'apply-node'
+        if beta_status == 'YES':
+            node_class += ' apply-yes'
+        elif beta_status == 'NO':
+            node_class += ' apply-no'
+    elif node_type == 'name':
+        label = f"{node_data['value']}"
+        node_class = 'name-node'
+    elif node_type == 'num':
+        label = f"{node_data['value']}"
+        node_class = 'num-node'
+    elif node_type == 'op':
+        label = f"{node_data['value']}"
+        node_class = 'op-node'
+    else:
+        label = node_type
+        node_class = 'default-node'
+    
+    # create node data structure
+    node = {
+        'data': {
+            'id': node_id,
+            'label': label,
+            'type': node_type,
+            'beta': beta_status,
+            'var': node_data.get('var'),
+            'value': node_data.get('value'),
+            'class': node_class
+        },
+        'position': {
+            'x': x,
+            'y': y
+        },
+        'classes': node_class
+    }
+    
+    elements.append(node)
+    
+    # add edge if this is not the root
+    if parent_id:
+        elements.append({
+            'data': {
+                'source': parent_id,
+                'target': node_id,
+                'id': f'edge_{parent_id}_{node_id}'
+            }
+        })
+    
+    children = node_data.get('children', [])
+    child_count = len(children)
+    
+    # recursively add children with specific positioning
+    if child_count == 2:
+        # left child at 45° angle
+        json_to_cytoscape_elements(
+            children[0], 
+            node_id, 
+            elements, 
+            level + 1, 
+            x - x_offset,
+            y + y_offset,
+            x_offset,
+            y_offset,
+            level_positions
+        )
+        
+        # right child at 45° angle
+        json_to_cytoscape_elements(
+            children[1], 
+            node_id, 
+            elements, 
+            level + 1, 
+            x + x_offset,
+            y + y_offset,
+            x_offset,
+            y_offset,
+            level_positions
+        )
+    elif child_count == 1:
+        # single child directly below
+        json_to_cytoscape_elements(
+            children[0], 
+            node_id, 
+            elements, 
+            level + 1, 
+            x,
+            y + y_offset,
+            x_offset,
+            y_offset,
+            level_positions
+        )
+    
+    return elements
 
-def draw_graph(G):
-    g = ig.Graph()
-    g = g.from_networkx(G)
-    color_map = {'NO':'red', 'YES':'green', None:'lightgray'}
-    node_map = {'lambda': 5, 'apply': 2, 'name':3, 'op': 4, 'num':5}
-
-    vdf = g.get_vertex_dataframe()
-
-    #layout_ = g.layout('rt') #Reingold-Tilford layout, seems like this is the only one working for trees
-    layout_ = g.layout_reingold_tilford(root=[0])
-    edge_x = []
-    edge_y = []
-    for edge in g.get_edgelist():
-        x0, y0 = layout_[edge[0]]
-        x1, y1 = layout_[edge[1]]
-        edge_x += [x0, x1, None]
-        edge_y += [y0, y1, None]
-
-    texts = []
-    for node in G.nodes():
-        texts.append(node+":"+G.nodes[node]["type"]+":"+str(G.nodes[node]["beta"]))
-    #print(texts)
-
-    node_x = [pos[0] for pos in layout_]
-    node_y = [pos[1] for pos in layout_]
-
-    symbols = []
-    for idx, row in vdf.iterrows():
-        if row['type'] == 'lambda':
-            symbols.append('triangle-up')
-        elif row['type'] == 'apply':
-            symbols.append('circle')
-        else:
-            symbols.append('square')
-
-    node_trace = go.Scatter(x=node_x, 
-                            y=node_y, 
-                            mode='markers', 
-                            marker=dict(size=30, color=[color_map[t] for t in g.vs['beta']], symbol=symbols),
-                            hovertemplate='', hoverinfo='none')
-    node_trace.customdata = texts
-    edge_trace = go.Scatter(x=edge_x, y=edge_y, mode='lines', line=dict(width=2, color='black'),
-                            hovertemplate='', hoverinfo='none')
-    layout = go.Layout(showlegend=False, hovermode='closest', margin=dict(b=20,l=5,r=5,t=40))
-    fig = go.Figure(data=[edge_trace, node_trace], layout=layout)
-    for node in G.nodes():
-        x, y = layout_[vdf[vdf._nx_name==node].index.values.item()]
-        prop = G.nodes[node]
-        if prop['type'] in ['name', 'op', 'num']:
-            fig.add_annotation(
-                x=x, y=y,
-                text=prop['value'],
-                xshift=0, yshift=0, align='center', showarrow=False,
-            )
-        elif prop['type'] =='lambda':
-            fig.add_annotation(
-                x=x, y=y,
-                text=f'{prop["var"]}',
-                xshift=0, yshift=0, align='center', showarrow=False,
-            )
-        else:
-            fig.add_annotation(
-                x=x, y=y,
-                text=f'{node}',
-                xshift=0, yshift=0, align='center', showarrow=False, visible=False,
-            )
-
-    fig.update_layout(yaxis = dict(autorange="reversed", showgrid=False, zeroline=False, showticklabels=False),
-                      xaxis = dict(showgrid=False, zeroline=False, showticklabels=False))
-    return fig
-
-def blank_fig():
-    fig = go.Figure(go.Scatter(x=[], y = []))
-    fig.update_layout(template = None)
-    fig.update_xaxes(showgrid = False, showticklabels = False, zeroline=False)
-    fig.update_yaxes(showgrid = False, showticklabels = False, zeroline=False)
-    return fig
-
-app = Dash(__name__)
+# ======== APP SETUP ========
+app = Dash(__name__, suppress_callback_exceptions=True)
 
 app.layout = html.Div(children=[
     dcc.Store(id='tree'),
     dcc.Store(id='prevtrees'),
+    dcc.Store(id='has-zoomed', data=False),
     dcc.Location(id='url'),
-    html.H2(children='Lambda Engine', style={'textAlign': 'center'}),
+    html.H2(children='Lambda Engine', style=styles['header']),
     html.Div(children=[
-        html.Button('Back', id='back', style={'marginRight': '10px'}),
-        dcc.Input(id='lambdaex', type='text', value='', placeholder='Enter an expression...', style={'marginRight': '10px'}),
-        html.Button('Submit', id='submit', style={'marginRight': '10px'}),
-        html.Button('Reset', id='reset'),
-        dcc.ConfirmDialog( id='parseerror', message='Parse Error!',),
-        #dcc.Alert( id="alert", message="This is an alert!", dismissible=True,),
-    ], style={'display': 'flex', 'alignItems': 'center', 'justifyContent': 'center', 'marginBottom': '20px'}),
+        html.Button('Back', id='back', style=styles['button']),
+        dcc.Input(
+            id='lambdaex', 
+            type='text', 
+            value='', 
+            placeholder='Enter an expression...', 
+            style=styles['input']
+        ),
+        html.Button('Submit', id='submit', style=styles['button']),
+        html.Button('Reset', id='reset', style=styles['button']),
+        dcc.ConfirmDialog(id='parseerror', message='Parse Error!'),
+    ], style=styles['controls_container']),
     html.Div(children=[
-        dcc.Graph(id='graph-content', style={'width': '60%'}, figure=blank_fig()),
-    ], style={'display': 'flex', 'alignItems': 'center', 'justifyContent': 'center'}),
+        cyto.Cytoscape(
+            id='cytoscape-graph',
+            layout={'name': 'preset', 'animate': False},
+            style=styles['cytoscape'],
+            elements=[],
+            stylesheet=cytoscape_stylesheet,
+            boxSelectionEnabled=False,
+            autounselectify=False,
+            userZoomingEnabled=True,
+            userPanningEnabled=True,
+            zoom=1,
+            minZoom=0.2,
+            maxZoom=3
+        ),
+    ], style=styles['graph_container']),
     html.Div(children=[
         html.P(id='stringtree'),
-    ], style={'display': 'flex', 'alignItems': 'center', 'justifyContent': 'center'}),
-    ], style={'maxWidth': '1000px', 'margin': '0 auto'})
+    ], style=styles['footer'])
+], style=styles['page_container'])
 
-@callback(Output('tree', 'data', allow_duplicate=True),
-          Output('prevtrees', 'data', allow_duplicate=True),
-          Output('submit', 'disabled'),
-          Output("parseerror", "displayed"),
-          Input('submit', 'n_clicks'), 
-          State('lambdaex', 'value'),
-          prevent_initial_call=True)
+# ======== INPUT CALLBACKS ========
+@callback(
+    Output('tree', 'data', allow_duplicate=True),
+    Output('prevtrees', 'data', allow_duplicate=True),
+    Output('submit', 'disabled'),
+    Output("parseerror", "displayed"),
+    Input('submit', 'n_clicks'), 
+    State('lambdaex', 'value'),
+    prevent_initial_call=True
+)
 def submit_initial_expression(n_clicks, value):
+    # process user submitted expression
     tree = get_initial_tree(value)
     if tree["status"] == "OK":
         return tree, [tree], True, False
     else:
-        print("ERROR parsing lambda expression",tree["message"])
-        return None,None,False,True
-    
-@callback(Output('tree', 'data', allow_duplicate=True),
-          Output('prevtrees', 'data', allow_duplicate=True),
-          Output('submit', 'disabled',allow_duplicate=True),
-          Output("parseerror", "displayed", allow_duplicate=True),
-          Input('url', 'href'), 
-          prevent_initial_call=True)
-def submit_initial_expression_url(href):
-    f = furl(href)
-    expression = f.args['expression']
-    expression = str(expression).replace('%20', ' ')
-    tree = get_initial_tree(expression)
-    if tree["status"] == "OK":
-        print(tree)
-        return tree, [tree], True, False
-    else:
-        print("ERROR parsing lambda expression",tree["message"])
+        print("ERROR parsing lambda expression", tree["message"])
         return None, None, False, True
+    
+@callback(
+    Output('tree', 'data', allow_duplicate=True),
+    Output('prevtrees', 'data', allow_duplicate=True),
+    Output('submit', 'disabled', allow_duplicate=True),
+    Output("parseerror", "displayed", allow_duplicate=True),
+    Input('url', 'href'), 
+    prevent_initial_call=True
+)
+def submit_initial_expression_url(href):
+    # parse expression from url parameter
+    f = furl(href)
+    try:
+        expression = f.args['expression']
+        expression = str(expression).replace('%20', ' ')
+        tree = get_initial_tree(expression)
+        if tree["status"] == "OK":
+            return tree, [tree], True, False
+        else:
+            print("ERROR parsing lambda expression", tree["message"])
+            return None, None, False, True
+    except KeyError:
+        return None, None, False, False
 
-@callback(Output('graph-content', 'figure'), 
-          Output('stringtree', 'children'), 
-          Input('tree', 'data'),
-          prevent_initial_call=True)
+# ======== VISUALIZATION CALLBACKS ========
+@callback(
+    Output('cytoscape-graph', 'elements'), 
+    Output('stringtree', 'children'), 
+    Input('tree', 'data'),
+    prevent_initial_call=True
+)
 def retrieve_data_from_store(tree):
-    G = nx.DiGraph()
-    # build the tree from the JSON data
-    if tree == None:
-        return blank_fig(), ""
+    # convert tree data to visual elements
+    if tree is None:
+        return [], ""
+        
     root_data = tree['expr_tree_json']
-    build_tree(G, root_data)
-    fig = draw_graph(G)
+    elements = json_to_cytoscape_elements(root_data, level_positions={})
+    
+    # generate text representation
     stringtree = ''
     if type(tree) == dict:
         stringtree = json2tree(tree['expr_tree_json'])
-    return fig, to_string(stringtree)
+        stringtree = to_string(stringtree)
+    
+    return elements, stringtree
 
-@callback(Output('tree', 'data', allow_duplicate=True),
-          Output('prevtrees', 'data', allow_duplicate=True),
-          Output('graph-content', 'clickData'), 
-          Input('graph-content', 'clickData'), 
-          State('tree', 'data'),
-          State('prevtrees', 'data'),
-          prevent_initial_call=True)
-def select_node(selection, tree, prevtrees):
-    if tree == None or "customdata" not in selection["points"][0]:
-        return
-    selected_node_id,selected_node_type, selected_node_beta = selection["points"][0]["customdata"].split(":")
+# ======== INTERACTION CALLBACKS ========
+@callback(
+    Output('tree', 'data', allow_duplicate=True),
+    Output('prevtrees', 'data', allow_duplicate=True),
+    Input('cytoscape-graph', 'tapNodeData'), 
+    State('tree', 'data'),
+    State('prevtrees', 'data'),
+    prevent_initial_call=True
+)
+def select_node(node_data, tree, prevtrees):
+    # handle user clicking on tree nodes
+    if tree is None or node_data is None:
+        return no_update, no_update
+        
+    selected_node_id = node_data['id']
+    selected_node_type = node_data['type']
+    selected_node_beta = node_data.get('beta')
+    
+    # handle beta reduction for apply nodes
     if selected_node_type == 'apply' and selected_node_beta == "YES":
         tree = get_next_tree(tree['expr_tree_json'], selected_node_id)
         tree = tree2dict(tree)
         tree = {"status": "OK", "expr_tree_json": tree}
-        if prevtrees is []:
+        
+        if prevtrees == [] or prevtrees is None:
             prevtrees = [tree]
         else:
             prevtrees.append(tree)
-        return tree, prevtrees, None
+            
+        return tree, prevtrees
+    
+    # handle arithmetic operations
     elif selected_node_type == 'op':
         tree = get_next_tree_after_math(tree['expr_tree_json'], selected_node_id)
         tree = tree2dict(tree)
         tree = {"status": "OK", "expr_tree_json": tree}
-        if prevtrees is []:
+        
+        if prevtrees == [] or prevtrees is None:
             prevtrees = [tree]
         else:
             prevtrees.append(tree)
-        return tree, prevtrees, None
-    else:
-        return
+            
+        return tree, prevtrees
+        
+    return no_update, no_update
 
-@callback(Output('tree', 'data', allow_duplicate=True),
-          Output('prevtrees', 'data', allow_duplicate=True),
-          Input('back', 'n_clicks'), 
-          State('tree', 'data'),
-          State('prevtrees', 'data'),
-          prevent_initial_call=True)
+@callback(
+    Output('tree', 'data', allow_duplicate=True),
+    Output('prevtrees', 'data', allow_duplicate=True),
+    Input('back', 'n_clicks'), 
+    State('tree', 'data'),
+    State('prevtrees', 'data'),
+    prevent_initial_call=True
+)
 def go_back(n_clicks, tree, prevtrees):
-    if len(prevtrees) > 1:
-        pt = prevtrees.pop(-1) #take the last tree from the store
+    # navigate to previous state in history
+    if prevtrees and len(prevtrees) > 1:
+        pt = prevtrees.pop(-1)
         return prevtrees[-1], prevtrees
+    return no_update, no_update
 
-@app.callback(Output('back', 'disabled'),
-              Input('prevtrees', 'data'),
-              prevent_initial_call=True)
+@callback(
+    Output('back', 'disabled'),
+    Input('prevtrees', 'data'),
+    prevent_initial_call=True
+)
 def set_back_button_disabled_state(prevtrees):
+    # disable back button when at initial state
     if prevtrees != None:
         return len(prevtrees) == 1
     else:
-        return False
+        return True
     
-@app.callback(Output('prevtrees', 'data', allow_duplicate=True),
-              Output('tree', 'data', allow_duplicate=True),
-              Output('back', 'disabled', allow_duplicate=True),
-              Output('lambdaex', 'value', allow_duplicate=True),
-              Output('submit', 'disabled', allow_duplicate=True),
-              Input('reset', 'n_clicks'),  prevent_initial_call=True)
+@callback(
+    Output('prevtrees', 'data', allow_duplicate=True),
+    Output('tree', 'data', allow_duplicate=True),
+    Output('back', 'disabled', allow_duplicate=True),
+    Output('lambdaex', 'value', allow_duplicate=True),
+    Output('submit', 'disabled', allow_duplicate=True),
+    Input('reset', 'n_clicks'),  
+    prevent_initial_call=True
+)
 def reset(n_clicks):
+    # clear all state and return to initial screen
     return [], None, True, '', False
 
+# ======== MAIN ========
 if __name__ == '__main__':
-    parser = ArgumentParser(prog='Lambda Engine',
-                            description='Process Lambda calculus and provides a graphical view of the steps of the process'
-                            )
+    parser = ArgumentParser(
+        prog='Lambda Engine',
+        description='Process Lambda calculus and provides a graphical view of the steps of the process'
+    )
     parser.add_argument('--hostname', default='localhost')
     parser.add_argument('--port', default='8081')
     args = parser.parse_args()

@@ -1,6 +1,6 @@
 from dash import Dash, html, dcc, callback, Output, Input, State, no_update
 from argparse import ArgumentParser
-from furl import furl
+from urllib.parse import urlparse, parse_qs
 import dash_cytoscape as cyto
 
 from Lambda import get_initial_tree, get_next_tree, get_next_tree_after_math
@@ -214,19 +214,22 @@ def submit_initial_expression(n_clicks, value):
     prevent_initial_call=True
 )
 def submit_initial_expression_url(href):
-    # parse expression from url parameter
-    f = furl(href)
-    try:
-        expression = f.args['expression']
-        expression = str(expression).replace('%20', ' ')
-        tree = get_initial_tree(expression)
-        if tree["status"] == "OK":
-            return tree, [tree], True, False
-        else:
-            print("ERROR parsing lambda expression", tree["message"])
-            return None, None, False, True
-    except KeyError:
-        return None, None, False, False
+    # parse expression from url parameter using standard library
+    if href:
+        parsed_url = urlparse(href)
+        query_params = parse_qs(parsed_url.query)
+        
+        if 'expression' in query_params:
+            expression = query_params['expression'][0]  # parse_qs returns lists
+            expression = str(expression).replace('%20', ' ')
+            tree = get_initial_tree(expression)
+            if tree["status"] == "OK":
+                return tree, [tree], True, False
+            else:
+                print("ERROR parsing lambda expression", tree["message"])
+                return None, None, False, True
+    
+    return None, None, False, False
 
 # ======== VISUALIZATION CALLBACKS ========
 @callback(

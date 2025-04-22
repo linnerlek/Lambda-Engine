@@ -1,0 +1,112 @@
+/* Overall layout */
+body, html {
+    height: 100%;
+    margin: 0;
+    font-family: "Lato", sans-serif;
+  }
+  
+  .header {
+    background-color: #0039a6;
+    display: flex;
+    align-items: center;
+    padding: 10px;
+    height: 4vh;
+  }
+  
+  .title {
+    color: white;
+    font-size: 24px;
+    margin: 0 auto;
+  }
+  
+  #app-container {
+    display: flex;
+    height: 94vh;
+    overflow: hidden;
+  }
+  
+  .left-section {
+    flex: 9;
+    display: flex;
+    flex-direction: column;
+    padding: 10px;
+    height: 100%;
+    overflow: hidden;
+  }
+  
+  .input-container {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 10px;
+    flex-wrap: wrap;
+  }
+  
+  .text-input {
+    flex: 1;
+    padding: 5px;
+    font-size: 16px;
+  }
+  
+  .button {
+    background-color: #0071CE;
+    color: white;
+    border: none;
+    padding: 6px 12px;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  
+  .button:hover {
+    background-color: #05508d;
+  }
+  
+  #cytoscape-graph {
+    flex: 1;
+    height: 100%;
+    width: 100%;
+    border: 1px solid #ccc;
+  }
+  
+  .string-output {
+    font-size: 16px;
+    margin-bottom: 20px;
+    max-height: 20vh;
+    overflow-y: auto;
+  }
+  
+  .divider {
+    width: 2px;
+    background-color: #0039a6;
+  }
+  
+  .right-section {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: start;
+    padding: 10px;
+    height: 100%;
+    overflow-y: auto;
+    background-color: #f8f8f8;
+  }
+  
+  #documentation-placeholder {
+    padding-top: 15px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  
+  #documentation-placeholder a {
+    color: #0039a6;
+    font-size: 16px;
+    text-decoration: none;
+  }
+  
+  #documentation-placeholder a:hover {
+    text-decoration: underline;
+    cursor: pointer;
+  }
+  
+  /* Markdown modal handled in modal.css */
+  

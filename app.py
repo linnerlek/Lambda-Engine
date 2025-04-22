@@ -1,73 +1,57 @@
+import dash
 from dash import Dash, html, dcc, callback, Output, Input, State, no_update
-from argparse import ArgumentParser
-from urllib.parse import urlparse, parse_qs
 import dash_cytoscape as cyto
+from urllib.parse import urlparse, parse_qs
+from argparse import ArgumentParser
+
+import os
 
 from Lambda import get_initial_tree, get_next_tree, get_next_tree_after_math
 from Lambda import tree2dict, to_string, json2tree
-from styles import cytoscape_stylesheet, styles
+from styles import cytoscape_stylesheet
+import re
 
 cyto.load_extra_layouts()
+app = Dash(__name__, suppress_callback_exceptions=True)
+app.title = "Lambda Engine"
 
-# ======== TREE VISUALIZATION ========
+
+# --------- Helpers ---------
 def json_to_cytoscape_elements(node_data, parent_id=None, elements=None, level=0, x=0, y=0, x_offset=120, y_offset=100, level_positions=None):
     if elements is None:
         elements = []
-    
     if level_positions is None:
         level_positions = {}
-    
+
     node_id = node_data['nodeid']
     node_type = node_data['type']
     beta_status = node_data.get('beta')
-    
-    # minimum pixel distance between nodes at same level
     min_separation = 60
-    
+
     if y not in level_positions:
         level_positions[y] = []
-    
-    # check if node overlaps with existing nodes
-    overlap_detected = False
-    for pos in level_positions[y]:
-        if abs(pos - x) < min_separation:
-            overlap_detected = True
-            break
-    
-    # adjust position if overlap occurs
-    if overlap_detected and parent_id:
+    overlap = any(abs(pos - x) < min_separation for pos in level_positions[y])
+    if overlap and parent_id:
         y += y_offset / 2
-        
         if y not in level_positions:
             level_positions[y] = []
-    
     level_positions[y].append(x)
-    
-    # determine node style based on type
+
+    label = ""
+    node_class = 'default-node'
     if node_type == 'lambda':
-        label = f"{node_data['var']}"
+        label = node_data['var']
         node_class = 'lambda-node'
     elif node_type == 'apply':
-        label = ""
         node_class = 'apply-node'
         if beta_status == 'YES':
             node_class += ' apply-yes'
         elif beta_status == 'NO':
             node_class += ' apply-no'
-    elif node_type == 'name':
-        label = f"{node_data['value']}"
-        node_class = 'name-node'
-    elif node_type == 'num':
-        label = f"{node_data['value']}"
-        node_class = 'num-node'
-    elif node_type == 'op':
-        label = f"{node_data['value']}"
-        node_class = 'op-node'
-    else:
-        label = node_type
-        node_class = 'default-node'
-    
-    # create node data structure
+    elif node_type in ['name', 'num', 'op']:
+        label = node_data['value']
+        node_class = f'{node_type}-node'
+
     node = {
         'data': {
             'id': node_id,
@@ -78,113 +62,164 @@ def json_to_cytoscape_elements(node_data, parent_id=None, elements=None, level=0
             'value': node_data.get('value'),
             'class': node_class
         },
-        'position': {
-            'x': x,
-            'y': y
-        },
+        'position': {'x': x, 'y': y},
         'classes': node_class
     }
-    
+
     elements.append(node)
-    
-    # add edge if this is not the root
     if parent_id:
-        elements.append({
-            'data': {
-                'source': parent_id,
-                'target': node_id,
-                'id': f'edge_{parent_id}_{node_id}'
-            }
-        })
-    
-    children = node_data.get('children', [])
-    child_count = len(children)
-    
-    # recursively add children with specific positioning
-    if child_count == 2:
-        # left child at 45° angle
-        json_to_cytoscape_elements(
-            children[0], 
-            node_id, 
-            elements, 
-            level + 1, 
-            x - x_offset,
-            y + y_offset,
-            x_offset,
-            y_offset,
-            level_positions
-        )
-        
-        # right child at 45° angle
-        json_to_cytoscape_elements(
-            children[1], 
-            node_id, 
-            elements, 
-            level + 1, 
-            x + x_offset,
-            y + y_offset,
-            x_offset,
-            y_offset,
-            level_positions
-        )
-    elif child_count == 1:
-        # single child directly below
-        json_to_cytoscape_elements(
-            children[0], 
-            node_id, 
-            elements, 
-            level + 1, 
-            x,
-            y + y_offset,
-            x_offset,
-            y_offset,
-            level_positions
-        )
-    
+        elements.append({'data': {'source': parent_id, 'target': node_id, 'id': f'edge_{parent_id}_{node_id}'}})
+
+    for i, child in enumerate(node_data.get('children', [])):
+        offset_x = x + (x_offset if i else -x_offset) if len(node_data['children']) == 2 else x
+        json_to_cytoscape_elements(child, node_id, elements, level + 1, offset_x, y + y_offset, x_offset, y_offset, level_positions)
+
     return elements
 
-# ======== APP SETUP ========
-app = Dash(__name__, suppress_callback_exceptions=True)
 
-app.layout = html.Div(children=[
+def get_md_file_content(filename):
+    with open(f'assets/{filename}', 'r') as file:
+        return file.read()
+
+
+# --------- Layout ---------
+app.layout = html.Div([
+    dcc.Location(id='url'),
     dcc.Store(id='tree'),
     dcc.Store(id='prevtrees'),
-    dcc.Store(id='has-zoomed', data=False),
-    dcc.Location(id='url'),
-    html.H2(children='Lambda Engine', style=styles['header']),
-    html.Div(children=[
-        html.Button('Back', id='back', style=styles['button']),
-        dcc.Input(
-            id='lambdaex', 
-            type='text', 
-            value='', 
-            placeholder='Enter an expression...', 
-            style=styles['input']
-        ),
-        html.Button('Submit', id='submit', style=styles['button']),
-        html.Button('Reset', id='reset', style=styles['button']),
-        dcc.ConfirmDialog(id='parseerror', message='Parse Error!'),
-    ], style=styles['controls_container']),
-    html.Div(children=[
-        cyto.Cytoscape(
-            id='cytoscape-graph',
-            layout={'name': 'preset', 'animate': False},
-            style=styles['cytoscape'],
-            elements=[],
-            stylesheet=cytoscape_stylesheet,
-            boxSelectionEnabled=False,
-            autounselectify=False,
-            userZoomingEnabled=True,
-            userPanningEnabled=True,
-            zoom=1,
-            minZoom=0.2,
-            maxZoom=3
-        ),
-    ], style=styles['graph_container']),
-    html.Div(children=[
-        html.P(id='stringtree'),
-    ], style=styles['footer'])
-], style=styles['page_container'])
+    html.Div(className="header", children=[
+        #html.Img(src=app.get_asset_url('lambda-logo.png'), className="logo"),
+        html.H1("Lambda Engine", className="title")
+    ]),
+    html.Div(id="app-container", children=[
+        html.Div(className="left-section", children=[
+            html.Div(className="input-container", children=[
+                html.Button('Back', id='back', className="button"),
+                dcc.Input(id='lambdaex', type='text', placeholder='Enter expression...', className="text-input"),
+                html.Button('Submit', id='submit', className="button"),
+                html.Button('Reset', id='reset', className="button"),
+                dcc.ConfirmDialog(id='parseerror', message='Parse Error!'),
+            ]),
+            cyto.Cytoscape(
+                id='cytoscape-graph',
+                layout={'name': 'preset'},
+                style={'width': '100%', 'height': '600px'},
+                elements=[],
+                stylesheet=cytoscape_stylesheet,
+                userZoomingEnabled=True,
+                userPanningEnabled=True
+            ),
+            html.P(id='stringtree', className="string-output")
+        ]),
+        html.Div(className="divider", id="divider"),
+        html.Div(className="right-section", children=[
+            html.Div(id="documentation-placeholder", children=[
+                html.A("Documentation", id="open-docs", href="#"),
+                html.A("Examples", id="open-queries", href="#")
+            ]),
+        ])
+    ]),
+    html.Div(id="modal-docs", className="modal", style={"display": "none"}, children=[
+        html.Div(className="modal-content", children=[
+            html.Div(id="doc-close-container", children=[
+                html.Button("Close", id="close-docs-btn")
+            ]),
+            html.Div(id="docs-body", className="markdown-content")
+        ])
+    ]),
+    html.Div(id="modal-queries", className="modal", style={"display": "none"}, children=[
+        html.Div(className="modal-content", children=[
+            html.Div(id="query-close-container", children=[
+                html.Button("Close", id="close-queries-btn")
+            ]),
+            html.Div(id="queries-body", className="markdown-content")
+        ])
+    ])
+])
+
+@callback(
+    [Output("modal-docs", "style"), Output("docs-body", "children")],
+    [Input("open-docs", "n_clicks"), Input("close-docs-btn", "n_clicks")],
+    prevent_initial_call=True
+)
+def toggle_docs_modal(open_clicks, close_clicks):
+    ctx = dash.callback_context
+    if ctx.triggered[0]['prop_id'].split('.')[0] == "open-docs":
+        return {"display": "flex"}, dcc.Markdown(get_md_file_content("instructions.md"))
+    return {"display": "none"}, ""
+
+
+@callback(
+    [Output("modal-queries", "style"),
+     Output("queries-body", "children")],
+    [Input("open-queries", "n_clicks"),
+     Input("close-queries-btn", "n_clicks")],
+    prevent_initial_call=True
+)
+def toggle_queries_modal(open_clicks, close_clicks):
+    ctx = dash.callback_context
+    if not ctx.triggered:
+        return {"display": "none"}, ""
+
+    trigger = ctx.triggered[0]['prop_id'].split('.')[0]
+    if trigger == "open-queries":
+        raw_md = get_md_file_content("queries.md")
+        parts = re.split(r'(```.*?```)', raw_md, flags=re.DOTALL)
+        content = []
+        index = 1
+
+        for part in parts:
+            part = part.strip()
+            if part.startswith("```") and part.endswith("```"):
+                code = part.strip("`").strip()
+                content.append(
+                    html.Pre(
+                        code,
+                        className='query-block',
+                        id={'type': 'query-block', 'index': index},
+                        style={'cursor': 'pointer'}
+                    )
+                )
+                index += 1
+            else:
+                content.append(dcc.Markdown(part, dangerously_allow_html=True))
+
+        return {"display": "flex"}, content
+
+    return {"display": "none"}, ""
+
+@callback(
+    Output("lambdaex", "value"),
+    [Input({"type": "query-block", "index": dash.dependencies.ALL}, "n_clicks")],
+    [State("queries-body", "children")],
+    prevent_initial_call=True
+)
+def insert_query_block(clicks, children):
+    ctx = dash.callback_context
+    if not ctx.triggered:
+        return dash.no_update
+
+    triggered = ctx.triggered[0]["prop_id"]
+    if "query-block" not in triggered:
+        return dash.no_update
+
+    triggered_id = eval(triggered.split(".")[0])
+    idx = triggered_id["index"]
+
+    # Check if this was an actual click (non-zero)
+    if clicks[idx - 1] is None or clicks[idx - 1] == 0:
+        return dash.no_update
+
+    for element in children:
+        if isinstance(element, dict) and element["type"] == "Pre":
+            props = element.get("props", {})
+            eid = props.get("id", {})
+            if eid.get("type") == "query-block" and eid.get("index") == idx:
+                return props.get("children")
+
+    return dash.no_update
+
+
 
 # ======== INPUT CALLBACKS ========
 @callback(

@@ -2,7 +2,8 @@
 
 This application is a `Dash`-based tool for visualizing and evaluating lambda calculus expressions. It features an interactive tree view rendered with `dash-cytoscape`, allowing users to perform beta reductions and arithmetic operations step-by-step.
 
-![ScreenRecording2025-03-21at11 46 55PM-ezgif com-video-to-gif-converter](https://github.com/user-attachments/assets/480d3e17-19e2-489e-a4ce-807c9b728004)
+![ScreenRecording2025-04-22at4 13 47PM-ezgif com-video-to-gif-converter](https://github.com/user-attachments/assets/520e0a27-794d-48b9-acc1-46f064a1a1ae)
+
 
 ---
 

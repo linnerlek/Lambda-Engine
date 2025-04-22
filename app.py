@@ -17,62 +17,74 @@ app.title = "Lambda Engine"
 
 
 # --------- Helpers ---------
-def json_to_cytoscape_elements(node_data, parent_id=None, elements=None, level=0, x=0, y=0, x_offset=120, y_offset=100, level_positions=None):
+def compute_subtree_width(node, base_width=120):
+    if not node.get("children"):
+        return base_width
+    return sum(compute_subtree_width(child, base_width) for child in node["children"])
+
+
+def json_to_cytoscape_elements(node_data, parent_id=None, elements=None, x=0, y=0, x_offset=120, y_offset=100):
     if elements is None:
         elements = []
-    if level_positions is None:
-        level_positions = {}
 
-    node_id = node_data['nodeid']
-    node_type = node_data['type']
-    beta_status = node_data.get('beta')
-    min_separation = 60
-
-    if y not in level_positions:
-        level_positions[y] = []
-    overlap = any(abs(pos - x) < min_separation for pos in level_positions[y])
-    if overlap and parent_id:
-        y += y_offset / 2
-        if y not in level_positions:
-            level_positions[y] = []
-    level_positions[y].append(x)
+    node_id = node_data["nodeid"]
+    node_type = node_data["type"]
+    beta_status = node_data.get("beta")
 
     label = ""
-    node_class = 'default-node'
-    if node_type == 'lambda':
-        label = node_data['var']
-        node_class = 'lambda-node'
-    elif node_type == 'apply':
-        node_class = 'apply-node'
-        if beta_status == 'YES':
-            node_class += ' apply-yes'
-        elif beta_status == 'NO':
-            node_class += ' apply-no'
-    elif node_type in ['name', 'num', 'op']:
-        label = node_data['value']
-        node_class = f'{node_type}-node'
+    node_class = "default-node"
+    if node_type == "lambda":
+        label = node_data["var"]
+        node_class = "lambda-node"
+    elif node_type == "apply":
+        node_class = "apply-node"
+        if beta_status == "YES":
+            node_class += " apply-yes"
+        elif beta_status == "NO":
+            node_class += " apply-no"
+    elif node_type in ["name", "num", "op"]:
+        label = node_data["value"]
+        node_class = f"{node_type}-node"
 
-    node = {
-        'data': {
-            'id': node_id,
-            'label': label,
-            'type': node_type,
-            'beta': beta_status,
-            'var': node_data.get('var'),
-            'value': node_data.get('value'),
-            'class': node_class
+    # Add current node
+    elements.append({
+        "data": {
+            "id": node_id,
+            "label": label,
+            "type": node_type,
+            "beta": beta_status,
+            "var": node_data.get("var"),
+            "value": node_data.get("value"),
+            "class": node_class,
         },
-        'position': {'x': x, 'y': y},
-        'classes': node_class
-    }
+        "position": {"x": x, "y": y},
+        "classes": node_class,
+    })
 
-    elements.append(node)
     if parent_id:
-        elements.append({'data': {'source': parent_id, 'target': node_id, 'id': f'edge_{parent_id}_{node_id}'}})
+        elements.append({
+            "data": {
+                "source": parent_id,
+                "target": node_id,
+                "id": f"edge_{parent_id}_{node_id}",
+            }
+        })
 
-    for i, child in enumerate(node_data.get('children', [])):
-        offset_x = x + (x_offset if i else -x_offset) if len(node_data['children']) == 2 else x
-        json_to_cytoscape_elements(child, node_id, elements, level + 1, offset_x, y + y_offset, x_offset, y_offset, level_positions)
+    # Recurse into children
+    children = node_data.get("children", [])
+    if children:
+        if len(children) == 2:
+            # Dynamically expand offset for wider subtrees
+            left_width = compute_subtree_width(children[0])
+            right_width = compute_subtree_width(children[1])
+
+            new_offset = max(x_offset, (left_width + right_width) // 2)
+
+            json_to_cytoscape_elements(children[0], node_id, elements, x - new_offset, y + y_offset, x_offset, y_offset)
+            json_to_cytoscape_elements(children[1], node_id, elements, x + new_offset, y + y_offset, x_offset, y_offset)
+
+        elif len(children) == 1:
+            json_to_cytoscape_elements(children[0], node_id, elements, x, y + y_offset, x_offset, y_offset)
 
     return elements
 
@@ -279,7 +291,7 @@ def retrieve_data_from_store(tree):
         return [], ""
         
     root_data = tree['expr_tree_json']
-    elements = json_to_cytoscape_elements(root_data, level_positions={})
+    elements = json_to_cytoscape_elements(root_data)
     
     # generate text representation
     stringtree = ''

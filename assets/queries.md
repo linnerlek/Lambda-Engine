@@ -33,6 +33,14 @@ This panel contains a set of example lambda expressions you can click to auto-fi
 - Demonstrates the Y combinator pattern
 - Useful in recursion and higher-order functions
 
+### Example 5: Factorial 2
+```
+(((LAMBDA F ((LAMBDA X (F (X X))) (LAMBDA X (F (X X))))) (LAMBDA F (LAMBDA X ((((LAMBDA P (LAMBDA A (LAMBDA B ((P A) B)))) ((LAMBDA N ((N (LAMBDA X (LAMBDA X (LAMBDA Y Y)))) (LAMBDA X (LAMBDA Y X)))) X)) (LAMBDA F (LAMBDA X (F X)))) (((LAMBDA M (LAMBDA N (LAMBDA F (LAMBDA X ((M (N F)) X))))) X) (F ((LAMBDA N (LAMBDA F (LAMBDA X (((N (LAMBDA G (LAMBDA H (H (G F))))) (LAMBDA U X)) (LAMBDA U U))))) X))))))) (LAMBDA F (LAMBDA X (F (F X)))));
+```
+- A complex lambda expression modeling factorial using Church encoding
+- Demonstrates the Y combinator, Booleans, pairs, and numerals
+- Useful for seeing how recursion, higher-order functions, and evaluation strategies interact
+
 ---
 
 ## How to Use

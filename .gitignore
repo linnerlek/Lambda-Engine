@@ -1,5 +1,6 @@
 parser.out
 parsetab.py
+lambda/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

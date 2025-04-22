@@ -28,6 +28,7 @@ cytoscape_stylesheet = [
         'style': {
             'shape': 'triangle',
             'background-color': '#e6e6e6',
+            'text-margin-y': '5px',
         }
     },
     {

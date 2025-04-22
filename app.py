@@ -244,7 +244,6 @@ def insert_query_block(clicks, children):
     prevent_initial_call=True
 )
 def submit_initial_expression(n_clicks, value):
-    # process user submitted expression
     tree = get_initial_tree(value)
     if tree["status"] == "OK":
         return tree, [tree], True, False
@@ -261,13 +260,12 @@ def submit_initial_expression(n_clicks, value):
     prevent_initial_call=True
 )
 def submit_initial_expression_url(href):
-    # parse expression from url parameter using standard library
     if href:
         parsed_url = urlparse(href)
         query_params = parse_qs(parsed_url.query)
         
         if 'expression' in query_params:
-            expression = query_params['expression'][0]  # parse_qs returns lists
+            expression = query_params['expression'][0]
             expression = str(expression).replace('%20', ' ')
             tree = get_initial_tree(expression)
             if tree["status"] == "OK":
@@ -286,20 +284,80 @@ def submit_initial_expression_url(href):
     prevent_initial_call=True
 )
 def retrieve_data_from_store(tree):
-    # convert tree data to visual elements
     if tree is None:
         return [], ""
         
     root_data = tree['expr_tree_json']
     elements = json_to_cytoscape_elements(root_data)
     
-    # generate text representation
+    # create text representation
     stringtree = ''
     if type(tree) == dict:
         stringtree = json2tree(tree['expr_tree_json'])
         stringtree = to_string(stringtree)
     
     return elements, stringtree
+
+def build_cytoscape_elements(node_data, parent_id=None, elements=None):
+    if elements is None:
+        elements = []
+    
+    node_id = node_data['nodeid']
+    node_type = node_data['type']
+    beta_status = node_data.get('beta')
+    
+    if node_type == 'lambda':
+        label = f"{node_data['var']}"
+        node_class = 'lambda-node'
+    elif node_type == 'apply':
+        label = ""
+        node_class = 'apply-node'
+        if beta_status == 'YES':
+            node_class += ' apply-yes'
+        elif beta_status == 'NO':
+            node_class += ' apply-no'
+    elif node_type == 'name':
+        label = f"{node_data['value']}"
+        node_class = 'name-node'
+    elif node_type == 'num':
+        label = f"{node_data['value']}"
+        node_class = 'num-node'
+    elif node_type == 'op':
+        label = f"{node_data['value']}"
+        node_class = 'op-node'
+    else:
+        label = node_type
+        node_class = 'default-node'
+    
+    node = {
+        'data': {
+            'id': node_id,
+            'label': label,
+            'type': node_type,
+            'beta': beta_status,
+            'var': node_data.get('var'),
+            'value': node_data.get('value'),
+            'class': node_class
+        },
+        'classes': node_class
+    }
+    
+    elements.append(node)
+    
+    if parent_id:
+        elements.append({
+            'data': {
+                'source': parent_id,
+                'target': node_id,
+                'id': f'edge_{parent_id}_{node_id}'
+            }
+        })
+    
+    children = node_data.get('children', [])
+    for child in children:
+        build_cytoscape_elements(child, node_id, elements)
+    
+    return elements
 
 # ======== INTERACTION CALLBACKS ========
 @callback(
@@ -311,7 +369,6 @@ def retrieve_data_from_store(tree):
     prevent_initial_call=True
 )
 def select_node(node_data, tree, prevtrees):
-    # handle user clicking on tree nodes
     if tree is None or node_data is None:
         return no_update, no_update
         
@@ -319,7 +376,7 @@ def select_node(node_data, tree, prevtrees):
     selected_node_type = node_data['type']
     selected_node_beta = node_data.get('beta')
     
-    # handle beta reduction for apply nodes
+    # perform beta reduction on eligible nodes
     if selected_node_type == 'apply' and selected_node_beta == "YES":
         tree = get_next_tree(tree['expr_tree_json'], selected_node_id)
         tree = tree2dict(tree)
@@ -332,7 +389,7 @@ def select_node(node_data, tree, prevtrees):
             
         return tree, prevtrees
     
-    # handle arithmetic operations
+    # evaluate arithmetic expressions
     elif selected_node_type == 'op':
         tree = get_next_tree_after_math(tree['expr_tree_json'], selected_node_id)
         tree = tree2dict(tree)
@@ -356,7 +413,6 @@ def select_node(node_data, tree, prevtrees):
     prevent_initial_call=True
 )
 def go_back(n_clicks, tree, prevtrees):
-    # navigate to previous state in history
     if prevtrees and len(prevtrees) > 1:
         pt = prevtrees.pop(-1)
         return prevtrees[-1], prevtrees
@@ -368,7 +424,6 @@ def go_back(n_clicks, tree, prevtrees):
     prevent_initial_call=True
 )
 def set_back_button_disabled_state(prevtrees):
-    # disable back button when at initial state
     if prevtrees != None:
         return len(prevtrees) == 1
     else:
@@ -384,7 +439,6 @@ def set_back_button_disabled_state(prevtrees):
     prevent_initial_call=True
 )
 def reset(n_clicks):
-    # clear all state and return to initial screen
     return [], None, True, '', False
 
 # ======== MAIN ========
@@ -397,4 +451,4 @@ if __name__ == '__main__':
     parser.add_argument('--port', default='8081')
     args = parser.parse_args()
 
-    app.run_server(debug=False, host=args.hostname, port=args.port)
+    app.run(debug=False, host=args.hostname, port=args.port)
